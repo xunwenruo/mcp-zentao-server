@@ -32,6 +32,7 @@
 | `get_project_detail`   | 获取项目详情                   |
 | `get_executions`       | 获取迭代列表（可按项目过滤）   |
 | `get_execution_detail` | 获取迭代详情                   |
+| `create_execution`     | 新建迭代，自动继承项目团队成员 |
 
 ## 快速开始
 
@@ -73,6 +74,32 @@ npm install
 ```
 
 > ⚠️ `args` 中的路径必须是**绝对路径**，不支持相对路径。
+
+#### 凭据放到 `.env`（推荐，避免明文进 mcp.json）
+
+把密码这类敏感值挪到脚本同目录的 `.env`，mcp.json 里只留 URL/账号：
+
+```bash
+cd mcp-zentao-server
+cp .env.example .env
+# 编辑 .env 填入真实密码
+chmod 600 .env
+```
+
+```env
+# .env
+ZENTAO_PASSWORD='你的禅道密码'
+```
+
+```json
+// mcp.json：去掉 ZENTAO_PASSWORD 行即可
+"env": {
+  "ZENTAO_URL": "http://your-zentao-host:8081",
+  "ZENTAO_ACCOUNT": "你的禅道账号"
+}
+```
+
+加载顺序：进程环境/mcp.json 优先，`.env` 兜底。`.env` 已被 `.gitignore` 忽略。
 
 ### 4. 重启 IDE / 重连 MCP
 
@@ -126,6 +153,8 @@ npm install
 | `/api.php/v1/projects/:id/executions` | GET  | 项目下迭代 |
 | `/api.php/v1/executions`              | GET  | 迭代列表   |
 | `/api.php/v1/executions/:id`          | GET  | 迭代详情   |
+| `/api.php/v1/projects/:id/executions` | POST | 新建迭代   |
+| `/execution-manageMembers-:id.json`   | POST | 设置迭代团队（网页表单，需 cookie 会话） |
 
 ## 常见问题
 
