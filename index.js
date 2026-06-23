@@ -429,6 +429,82 @@ server.tool(
   },
 );
 
+// ============ 附件图片下载 ============
+//
+// 禅道附件接口（如 /file-read-<id>.png）需要登录态 Token，直接 GET 只会拿到一段
+// 跳转登录页的 HTML。本工具复用 getToken / cachedToken 流程拿 Token 下载图片，
+// 返回 base64 image content 给 vision agent 直接识别，免去走文件系统。
+//
+// 设计要点：
+//   - 入参支持 URL / 文件名 / 纯数字 file id（与原 download-zentao-image.py 等价）
+//   - 禅道 file-read 端点忽略 URL 后缀，按 id 服务真实文件，所以补 .png 也能取 jpg/gif
+//   - 字节嗅探 PNG/JPEG/GIF/WebP magic 决定 mimeType
+//   - Token 过期时禅道返回 200 + 登录跳转 HTML，本工具检测到非图片后强制
+//     refresh Token 重试一次，避免长驻进程缓存的过期 Token 导致静默失败
+
+function normalizeZentaoImageRef(arg) {
+  const s = String(arg || "").trim();
+  if (!s) throw new Error("空的图片引用");
+  if (/^https?:\/\//i.test(s)) return s;
+  const base = ZENTAO_URL.replace(/\/$/, "");
+  if (/^\d+$/.test(s)) return `${base}/file-read-${s}.png`;
+  return `${base}/${s.replace(/^\//, "")}`;
+}
+
+function sniffImageMime(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return "image/gif";
+  if (
+    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+  ) return "image/webp";
+  return null;
+}
+
+server.tool(
+  "get_zentao_image",
+  "下载禅道附件图片（如 bug.steps 里 <img src='.../file-read-<id>.png'>），返回 image 内容供 agent 识别。禅道附件需要登录态，直接 GET 只会拿到登录跳转页",
+  {
+    imageRef: z
+      .string()
+      .describe("图片引用，可以是: 完整 URL（http://.../file-read-3962.png）、文件名（file-read-3962.png）或纯数字 file id（3962）"),
+  },
+  async ({ imageRef }) => {
+    try {
+      const url = normalizeZentaoImageRef(imageRef);
+
+      const fetchOnce = async (token) => {
+        const resp = await fetch(url, { headers: { Token: token } });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return Buffer.from(await resp.arrayBuffer());
+      };
+
+      let buf = await fetchOnce(await getToken());
+      let mime = sniffImageMime(buf);
+
+      // Token 过期时禅道返回 200 + 登录跳转 HTML，强制刷新 Token 重试一次
+      if (!mime) {
+        const head = buf.slice(0, 200).toString("utf8").toLowerCase();
+        if (head.includes("<html") || head.includes("user-login")) {
+          buf = await fetchOnce(await getToken(true));
+          mime = sniffImageMime(buf);
+        }
+      }
+      if (!mime) {
+        throw new Error("响应不是图片（可能是登录跳转 / 404 / 其它错误页）");
+      }
+
+      return {
+        content: [{ type: "image", data: buf.toString("base64"), mimeType: mime }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `下载禅道图片失败: ${err.message}` }], isError: true };
+    }
+  },
+);
+
 // ============ 需求（研发需求/Story）相关工具 ============
 
 const STORY_STATUS_LABELS = {

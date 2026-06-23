@@ -13,6 +13,7 @@
 | `resolve_bug`    | 解决 Bug（支持多种解决方案）                  |
 | `close_bug`      | 关闭已解决的 Bug                              |
 | `activate_bug`   | 重新激活已关闭/已解决的 Bug                   |
+| `get_zentao_image` | 下载禅道附件图片（如 bug.steps 中需要登录态 Token 才能拿到的 `<img src='…/file-read-<id>.png'>`），返回图片内容供 vision agent 直接识别 |
 
 ### 任务管理
 
