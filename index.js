@@ -262,31 +262,20 @@ server.tool(
 
 // 工具3: 解决 Bug
 //
-// ⚠️ 已知缺陷（2026-06 实测定位）：steps 字段每次调用都会被 HTML entity
-// 再编码一次，多次 resolve 同一个 bug 会让 steps 累积成不可读的字面字符
-// （raw `<p>` → `&lt;p&gt;` → `&amp;lt;p&amp;gt;` → `&amp;amp;lt;…` …）。
+// ✅ 已修复（2026-06，在 bug 3329 上实测）：改用动作子端点
+//    POST /api.php/v1/bugs/{id}/resolve，不再走全量编辑 PUT /bugs/{id}。
 //
-// 根因（已读源码 + 探针验证）：
-//   - PUT /api.php/v1/bugs/{id} 走 api/v1/entries/bug.php::put($bugID)
-//   - 入口用 batchSetPost('...,steps,...', $oldBug) 把 oldBug 的 raw HTML
-//     steps 强制塞进 $_POST，丢失字段类型信息
-//   - 进入 module/bug/control.php::edit() → form::data()
-//   - form::data 在 REST 上下文下不识别 richtext，对 steps 一律 htmlspecialchars，
-//     且不做反向 decode；web UI 不出问题是因为它走另一条字段类型分流的路径
+// 历史缺陷（PUT 路径）：steps 字段每次调用都被 HTML entity 再编码一次，
+//   多次 resolve 会让 steps 累积成不可读字面字符（<p> → &lt;p&gt; → …）。
+//   根因：PUT /bugs/{id} → bug.php::put() 用 batchSetPost('...,steps,...', $oldBug)
+//   把 oldBug 的 raw HTML steps 强塞进 $_POST，form::data 在 REST 上下文不识别
+//   richtext，对 steps 一律 htmlspecialchars 且不反向 decode。
 //
-// 已实测不通的客户端绕过方案（在 bug 2643 上各跑过 1 次 PUT 探针）：
-//   A. 不传 steps      — 服务端 batchSetPost 用 oldBug 填后仍 escape
-//   B. 显式传 raw HTML — 服务端 escape 一次 → DB 变 single-encoded
-//   C. 显式传 entity-encoded HTML — 服务端再 escape 一层 → DB 变 double
-//   D. POST /bug-resolve-{id}.json + Token 头 — 框架当 GET 处理，不消费 POST 体
-//
-// 真正解决路径（成本均高，未实施）：
-//   - 给 zentaopms 提 PR 让 form::data 在 REST 上下文识别 richtext 字段类型
-//   - 或本 server 改走直连 MySQL 直写 zt_bug + zt_action（版本耦合）
-//
-// 当前策略：维持 REST PUT。调用方（jiuzhou-bug-fix skill）需在调用前判断
-// bug.steps 是否含富文本 / 图片 / 重要历史；如是，应建议用户在禅道 web UI
-// 手动点解决，不要走本工具自动解决。
+// 现行方案：动作端点 POST /bugs/{id}/resolve 走专用 resolve 流程，
+//   只更新 resolution/resolvedBuild/resolvedDate/assignedTo + 写 comment，
+//   不重提 steps，因此无编码污染。已验证：连续 3 次 resolve 同一个含
+//   富文本 + 图片的 bug，steps 长度与内容始终不变（171 字符 raw HTML）。
+//   该端点同样支持 comment / assignedTo（assignedTo 实测生效）。
 server.tool(
   "resolve_bug",
   "解决指定的 Bug（将状态改为已解决）",
@@ -326,7 +315,10 @@ server.tool(
         body.assignedTo = finalAssignedTo;
       }
 
-      await zentaoFetch(`/bugs/${bugId}`, "PUT", body);
+      // 用动作端点 POST /bugs/{id}/resolve（而非全量编辑 PUT /bugs/{id}），
+      // 后者会重提 steps 导致每次 HTML entity 二次编码。动作端点不碰 steps。
+      // 已在 bug 3329 上实测：连续多次 resolve，steps 始终是干净 raw HTML。
+      await zentaoFetch(`/bugs/${bugId}/resolve`, "POST", body);
 
       const resolutionLabels = {
         fixed: "已修复",
